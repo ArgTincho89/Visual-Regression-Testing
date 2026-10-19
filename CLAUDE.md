@@ -1,4 +1,4 @@
-# Visual Testing Agent — Project Instructions
+# Visual Regression Testing — Project Instructions
 
 This is a standalone visual regression testing tool, extracted and made independent from
 `agentic-qe`'s `qe-visual-tester` subagent, plus a packaged, framework-agnostic skill
@@ -35,7 +35,7 @@ see the skill for whether/how/what-to-mask judgment calls.
 - Verify explanations against real data before stating them as fact. More than once a plausible-
   sounding mechanism turned out to be wrong (or incomplete) once the actual numbers/images were
   checked — always pull the real JSON/PNG evidence before explaining *why* something happened.
-- The repo at `github.com/ArgTincho89/Visual-Testing-Agent` is **public**. Never commit real
+- The repo at `github.com/ArgTincho89/Visual-Regression-Testing` is **public**. Never commit real
   target-app URLs, credentials, or screenshots of someone's actual app/data to it — those stay
   local-only, gitignored, and get deleted once they've served their purpose (e.g. validating a
   skill change against a live app). Ask before pushing anything that touches a real test target.

@@ -78,7 +78,7 @@ on-disk profile concurrently, and prefer working against a disposable copy of it
 the authenticated original, so a crashed or killed run never corrupts the one thing a human
 had to do by hand.
 
-If this skill is being read from inside the VisualTestingAgent project itself, its
+If this skill is being read from inside the Visual Regression Testing project itself, its
 `README.md` has the complete CLI/config reference this is condensed from — useful for exact
 flag names, but not required to apply the judgment calls below.
 
@@ -277,7 +277,7 @@ observed failure shapes:
    arbitrary rectangles), verify in each direction separately: does the container's box
    start/end where you expect, and does the content's box stay within the container's
    visible width — don't assume either. If this skill is being read from inside the
-   VisualTestingAgent project itself, its `maskIntersections` config option computes exactly
+   Visual Regression Testing project itself, its `maskIntersections` config option computes exactly
    this intersection — see `README.md`'s "Masking a scrollable region."
 
 3. **A selector matches an element, but that element currently renders no pixels.** An
@@ -333,7 +333,7 @@ Rule: anchor the capture to an **observable completion signal**, never a fixed d
   action.
 - Only once both are true, capture.
 
-If this skill is being read from inside the VisualTestingAgent project itself, its
+If this skill is being read from inside the Visual Regression Testing project itself, its
 `waitForResponse` and `stabilizeSelector` config options implement exactly these two steps —
 see `README.md`'s "Avoiding mid-load captures."
 
@@ -481,5 +481,5 @@ To embed a failing result into your own HTML report:
 3. Only build a diff card for `failed`/`size-mismatch` results — don't pad the report with
    image triplets for passing tests.
 
-If this skill is being read from inside the VisualTestingAgent project itself, its own
+If this skill is being read from inside the Visual Regression Testing project itself, its own
 `src/report.ts` (`writeHtmlReport`) is a working reference implementation of exactly this.

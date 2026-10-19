@@ -1,4 +1,4 @@
-# Visual Testing Agent
+# Visual Regression Testing
 
 A standalone visual regression testing tool, extracted from the `qe-visual-tester` subagent in
 [agentic-qe](https://github.com/ruvnet/ruflo) and stripped of every framework dependency (no
