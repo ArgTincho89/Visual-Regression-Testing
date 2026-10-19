@@ -10,14 +10,17 @@ against an approved baseline, and flag real visual regressions — without drown
 positives from a page's own legitimately-changing content (live data, dates, computed
 totals, user-specific values). The hard part is not running the diff; `pixelmatch`-based
 pixel comparison is a solved, mechanical problem. The hard part is deciding **what to
-compare** and **what to ignore**, and getting both decisions right without a human staring
-at every run.
+compare**, **what to ignore**, and **when the screen is actually ready to capture** — and
+getting all three right without a human staring at every run.
 
-This skill packages the engineering mechanics (a `pixelmatch` + Playwright capture/compare
-tool) together with the decision discipline for using it well — developed by running it
-against two real applications, iterating on masking mistakes until they stopped recurring.
-Every rule below exists because a specific, observed failure mode produced a wrong result
-first.
+This skill packages the engineering mechanics — capture/compare, masking down to the
+geometric intersection of two elements for scrollable regions, completion-aware capture
+timing instead of a fixed wait — together with the decision discipline for using it well:
+whether a checkpoint is worth adding, which state to anchor it to, and how to mask without
+over- or under-masking. Every rule below exists because a specific, observed failure mode —
+a selector that masked the wrong thing, a capture taken mid-load, an anchor state that made
+masking balloon from under 10% to over 40% of the frame — produced a wrong result first, and
+was turned into a rule so it wouldn't recur.
 
 ## Before you start
 
@@ -31,6 +34,14 @@ apply:
   viewport, and two selector lists — `maskSelectors` (paint over, keep position/size) and
   `hideSelectors` (`visibility:hidden`, keep layout space) — plus a `threshold` for the
   allowed differing-pixel fraction.
+- An observable-completion wait beyond a generic network-idle check (Part 5): at minimum a
+  selector-presence wait; ideally also a way to wait for a specific network response and a
+  way to poll a selector until its content reads the same twice in a row. A fixed wait alone
+  has reproduced false positives in practice.
+- A way to mask the geometric intersection of two selectors' boxes, not only a single
+  selector's own bounding box — needed for any screen with an internally-scrollable region
+  (Part 4, case 2), where neither the content element's nor the container's bounding box
+  alone is correct.
 - A missing baseline creates one and reports that as a non-failure, not an error.
 - A result per test shaped like the Output contract at the end of this document (status,
   similarity, image paths, diff regions).
@@ -203,10 +214,39 @@ anchor to a state where the count is also deterministic (Part 2), or accept that
 region of the screen cannot get a meaningful pixel-level checkpoint and rely on functional
 assertions for it instead.
 
+### A mask config is scoped to one state
+
+Selectors verified for one rendering of a screen don't automatically transfer to a
+structurally different branch of the *same* screen — a different conditional render (a
+status that swaps an entire panel's layout, not just a value inside it), not merely
+different data. Treat each structurally distinct branch as needing its own enumeration
+(Part 6, step 4) and its own verification pass (Part 4), even if some selectors happen to
+be reused across both.
+
+### Masking a field that doubles as your anchor's identity
+
+A field that is both "content you'd normally mask because it varies" and "the thing that
+identifies the deterministic fixture you anchored to" (Part 2) — a seeded test record's own
+name or title, say — needs an explicit decision, not a default. Masking it trades away the
+ability to catch a real rendering regression in that field in exchange for not depending on
+the fixture's exact value staying unchanged forever (if the fixture is ever renamed or
+recreated, an unmasked baseline on it will false-positive on nothing but the name). Leaving
+it unmasked does the reverse. Neither choice is automatically correct — record which one was
+made and why, the same as any other masking decision (Part 6, step 8).
+
+### Don't let masking swallow the exact thing the checkpoint exists to catch
+
+If a screen earned its checkpoint because of a computed visual state (Part 1) — a
+status-badge color, a progress-bar fill — masking that region at a granularity coarser than
+the state itself (e.g. the whole row/card instead of just the badge) can quietly defeat the
+checkpoint's own purpose: the value is hidden, but so is the rendering you actually came
+here to guard. When a checkpoint's reason-to-exist and a masking decision touch the same
+element, resolve them together, not independently.
+
 ## Part 4 — Masking: verify the boundary against the real DOM, every time
 
 The most common and most damaging mistake is choosing a selector that *visually* seems to
-bound the dynamic content, without confirming what it *actually* contains. Two real,
+bound the dynamic content, without confirming what it *actually* contains. Four real,
 observed failure shapes:
 
 1. **A shared wrapper contains both the dynamic content and an unrelated static sibling.**
@@ -236,12 +276,43 @@ observed failure shapes:
    bounding box alone. If your masking mechanism only accepts element selectors (not
    arbitrary rectangles), verify in each direction separately: does the container's box
    start/end where you expect, and does the content's box stay within the container's
-   visible width — don't assume either.
+   visible width — don't assume either. If this skill is being read from inside the
+   VisualTestingAgent project itself, its `maskIntersections` config option computes exactly
+   this intersection — see `README.md`'s "Masking a scrollable region."
 
-In both cases the lesson generalizes: **a class/selector name is a hypothesis about what it
-bounds, not a guarantee.** Confirm it against the real rendered output before shipping it in
-a baseline config, the same way this skill expects every other test selector to be
-confirmed rather than guessed.
+3. **A selector matches an element, but that element currently renders no pixels.** An
+   inactive tab, a collapsed section, a zero-height state — the mask paints onto whatever is
+   actually on screen, so a selector that resolves in the DOM but isn't visible in *this
+   particular capture* masks nothing, silently. The config looks complete (every selector
+   matched something), but real dynamic content underneath it is fully exposed to the diff.
+   **Fix**: don't trust "the selector matched" as proof the mask worked — confirm a non-zero
+   masked-pixel count for that specific region in the captured frame (or, at minimum, that
+   the element is visible at capture time). This is a different problem from a selector that
+   legitimately matches zero *elements* because the content it targets is conditional (an
+   alert that only renders 0-N times) — that's expected, and the selector should stay in the
+   config for when the condition is true; the dangerous case is an element that exists but
+   isn't currently showing anything.
+
+4. **The masked element's own position varies between captures.** Masking paints over a
+   selector at wherever it currently renders — which neutralizes *content*, exactly as
+   intended, right up until the element's *position itself* is the dynamic property (e.g. a
+   `position: relative` offset that shifts a few pixels on every load). The mask painted in
+   the baseline capture and the mask painted in the comparison capture are then two different
+   rectangles, not one fixed one — confirmed in practice as two thin strips, exactly the
+   shift distance wide, left uncovered at the element's left and right edges even with the
+   mask applied: the sliver where only one of the two captures' masks covered that spot is a
+   real, unmasked pixel difference.
+   **Fix**: a selector-level mask can't solve this by itself — it needs to cover the
+   element's full range of possible positions (a fixed container sized to the maximum
+   possible shift, with margin), not just the element's own current bounding box on either
+   side of the comparison. If the page has no such bounding container, and the masking
+   mechanism only accepts selectors (not an arbitrary padded rectangle), this is a genuine
+   limitation to record, not a selector to keep tweaking.
+
+In all four cases the lesson generalizes: **a class/selector name is a hypothesis about
+what it bounds, not a guarantee.** Confirm it against the real rendered output before
+shipping it in a baseline config, the same way this skill expects every other test selector
+to be confirmed rather than guessed.
 
 ## Part 5 — Capture timing: never a fixed wait
 
@@ -262,6 +333,10 @@ Rule: anchor the capture to an **observable completion signal**, never a fixed d
   action.
 - Only once both are true, capture.
 
+If this skill is being read from inside the VisualTestingAgent project itself, its
+`waitForResponse` and `stabilizeSelector` config options implement exactly these two steps —
+see `README.md`'s "Avoiding mid-load captures."
+
 If the application being tested already has this discipline built into its own test
 automation (waiting for a named endpoint response, polling until a snapshot stabilizes),
 reuse that exact mechanism for the visual capture too — don't introduce a second, looser
@@ -276,7 +351,8 @@ timing strategy alongside a stricter one that already exists for the same screen
    already performs to get there (don't invent a shortcut navigation path).
 4. **Enumerate the dynamic content** visible at that state: anything whose value depends on
    data, time, the logged-in identity, or prior test runs rather than on the application's
-   own static design.
+   own static design — including computed counts or labels (a pagination total, a result
+   count) that are easy to overlook because they read as chrome rather than data.
 5. **For each dynamic element, find the narrowest selector that bounds only it** (Part 3),
    and **verify that boundary against the real DOM** (Part 4) — read the component source
    if available, or inspect the live element tree; confirm the selector matches exactly
@@ -284,9 +360,11 @@ timing strategy alongside a stricter one that already exists for the same screen
 6. **Capture with those masks applied**, anchored by an observable completion signal
    (Part 5), never a fixed wait.
 7. **Sanity-check the result visually** (and, when possible, quantitatively — e.g., the
-   fraction of the frame that ended up masked) before trusting it as a baseline. A
-   surprisingly high masked fraction is a signal to revisit Part 2 or Part 3, not something
-   to accept and move on from.
+   fraction of the frame that ended up masked) before trusting it as a baseline. Check this
+   per selector, not only as one aggregate number — an aggregate fraction can look reasonable
+   while one selector (Part 4, case 3) painted nothing at all. A surprisingly high masked
+   fraction is a signal to revisit Part 2 or Part 3, not something to accept and move on
+   from.
 8. **Record the rationale**: which selector, why it's dynamic, and why it's scoped the way
    it is. The next person (or the next run of this same reasoning) should not have to
    re-derive it from scratch, and should be able to tell a deliberate decision from an

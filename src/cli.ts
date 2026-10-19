@@ -19,6 +19,50 @@ interface TestOptions {
   storageStatePath?: string;
 }
 
+const DEFAULT_VIEWPORTS = ['mobile-m', 'tablet', 'desktop-l'];
+
+/**
+ * Checks the shape `run` actually depends on, so a missing/mistyped field fails here with a
+ * specific message instead of surfacing later as a confusing error deep inside Playwright or
+ * pixelmatch. Deliberately shallow — not a full schema validator (no new dependency for it,
+ * per CLAUDE.md's "keep the CLI dependency-light") — just the fields this CLI reads directly.
+ */
+function validateRunConfig(config: unknown): asserts config is RunConfig {
+  if (!config || typeof config !== 'object') {
+    throw new Error('Config must be a JSON object.');
+  }
+  const c = config as Record<string, unknown>;
+
+  if (!Array.isArray(c.pages) || c.pages.length === 0) {
+    throw new Error('Config must have a non-empty "pages" array.');
+  }
+  c.pages.forEach((p, i) => {
+    if (!p || typeof p !== 'object') {
+      throw new Error(`pages[${i}] must be an object.`);
+    }
+    const page = p as Record<string, unknown>;
+    if (typeof page.name !== 'string' || !page.name) {
+      throw new Error(`pages[${i}] is missing a "name" string.`);
+    }
+    if (typeof page.url !== 'string' || !page.url) {
+      throw new Error(`pages[${i}] ("${page.name}") is missing a "url" string.`);
+    }
+  });
+
+  if (c.viewports !== undefined && !Array.isArray(c.viewports)) {
+    throw new Error('"viewports" must be an array of strings if present.');
+  }
+  if (c.threshold !== undefined && (typeof c.threshold !== 'number' || c.threshold < 0 || c.threshold > 1)) {
+    throw new Error('"threshold" must be a number between 0 and 1.');
+  }
+  if (
+    c.pixelSensitivity !== undefined &&
+    (typeof c.pixelSensitivity !== 'number' || c.pixelSensitivity < 0 || c.pixelSensitivity > 1)
+  ) {
+    throw new Error('"pixelSensitivity" must be a number between 0 and 1.');
+  }
+}
+
 async function testOne(
   capture: BrowserCapture,
   target: PageTarget,
@@ -41,8 +85,13 @@ async function testOne(
     fullPage: target.fullPage,
     waitForSelector: target.waitForSelector,
     waitForTimeout: target.waitForTimeout,
+    waitForResponse: target.waitForResponse,
+    waitForResponseTimeout: target.waitForResponseTimeout,
+    stabilizeSelector: target.stabilizeSelector,
+    stabilizeTimeout: target.stabilizeTimeout,
     hideSelectors: target.hideSelectors,
     maskSelectors: target.maskSelectors,
+    maskIntersections: target.maskIntersections,
     clickSelectors: target.clickSelectors,
     storageStatePath: opts.storageStatePath,
   });
@@ -123,7 +172,7 @@ async function runConfig(config: RunConfig): Promise<void> {
   const outputDir = config.outputDir ?? '.visual-tests';
   const threshold = config.threshold ?? 0.01;
   const pixelSensitivity = config.pixelSensitivity ?? 0.1;
-  const viewports = config.viewports.map(resolveViewport);
+  const viewports = (config.viewports?.length ? config.viewports : DEFAULT_VIEWPORTS).map(resolveViewport);
   const capture = new BrowserCapture();
   const results: VisualDiffResult[] = [];
   const start = Date.now();
@@ -194,7 +243,8 @@ program
   .option('--update-baselines', 'Overwrite all baselines with current captures')
   .action(async (opts) => {
     const raw = fs.readFileSync(path.resolve(opts.config), 'utf-8');
-    const config = JSON.parse(raw) as RunConfig;
+    const config = JSON.parse(raw) as unknown;
+    validateRunConfig(config);
     if (opts.updateBaselines) config.updateBaselines = true;
     await runConfig(config);
   });
@@ -211,6 +261,9 @@ program
   .option('--mask <selectors...>', 'CSS selectors to mask before capture')
   .option('--click <selectors...>', 'CSS selectors to click in sequence before capture (e.g. to switch tabs)')
   .option('--wait-for <selector>', 'CSS selector to wait for before capture')
+  .option('--wait-timeout <ms>', 'Timeout for --wait-for, or a fixed wait if used without --wait-for')
+  .option('--wait-for-response <substring>', 'Wait for a network response whose URL contains this substring before capture')
+  .option('--stabilize-selector <selector>', "Poll this selector's text content until it reads the same on two consecutive checks before capture")
   .option('--storage-state <path>', 'Playwright storageState JSON to reuse a logged-in session (see the login command)')
   .option('--update-baseline', 'Overwrite the existing baseline', false)
   .option('-o, --output-dir <dir>', 'Output directory', '.visual-tests')
@@ -228,6 +281,9 @@ program
           maskSelectors: opts.mask,
           clickSelectors: opts.click,
           waitForSelector: opts.waitFor,
+          waitForTimeout: opts.waitTimeout ? Number(opts.waitTimeout) : undefined,
+          waitForResponse: opts.waitForResponse,
+          stabilizeSelector: opts.stabilizeSelector,
         },
         viewport,
         opts.outputDir,

@@ -8,12 +8,27 @@ export interface Viewport {
   userAgent?: string;
 }
 
+export interface MaskIntersection {
+  /** Selector that bounds the dynamic content on one axis (e.g. a scrollable tbody). */
+  contentSelector: string;
+  /** Selector that bounds the visible, clipped region on the other axis (e.g. the scroll container). */
+  containerSelector: string;
+}
+
 export interface CaptureOptions {
   fullPage?: boolean;
   waitForSelector?: string;
   waitForTimeout?: number;
+  /** Substring matched against a response URL; capture waits for it before proceeding. */
+  waitForResponse?: string;
+  waitForResponseTimeout?: number;
+  /** Selector whose text content must read identically on two consecutive polls before capture. */
+  stabilizeSelector?: string;
+  stabilizeTimeout?: number;
   hideSelectors?: string[];
   maskSelectors?: string[];
+  /** Masks the geometric intersection of two selectors' boxes — see MaskIntersection. */
+  maskIntersections?: MaskIntersection[];
   navigationTimeout?: number;
   clickSelectors?: string[];
   storageStatePath?: string;
@@ -75,8 +90,13 @@ export interface PageTarget {
   fullPage?: boolean;
   waitForSelector?: string;
   waitForTimeout?: number;
+  waitForResponse?: string;
+  waitForResponseTimeout?: number;
+  stabilizeSelector?: string;
+  stabilizeTimeout?: number;
   hideSelectors?: string[];
   maskSelectors?: string[];
+  maskIntersections?: MaskIntersection[];
   clickSelectors?: string[];
 }
 
@@ -98,7 +118,8 @@ export interface AuthConfig {
 export interface RunConfig {
   baseUrl?: string;
   pages: PageTarget[];
-  viewports: string[];
+  /** Defaults to `['mobile-m', 'tablet', 'desktop-l']` if omitted. */
+  viewports?: string[];
   threshold?: number;
   pixelSensitivity?: number;
   outputDir?: string;

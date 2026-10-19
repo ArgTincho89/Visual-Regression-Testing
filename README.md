@@ -69,6 +69,7 @@ node dist/cli.js run --config visual.config.json
 
 `test` flags: `--viewport <preset|WxH[xScale]>`, `--full-page`, `--threshold <0-1>`,
 `--hide <selectors...>`, `--mask <selectors...>`, `--wait-for <selector>`,
+`--wait-timeout <ms>`, `--wait-for-response <substring>`, `--stabilize-selector <selector>`,
 `--update-baseline`, `--output-dir <dir>`.
 
 ## Config file (`run`)
@@ -140,6 +141,11 @@ npx tsx src/cli.ts test --url https://your-app/#/summary --name summary \
 - `pixelSensitivity` — pixelmatch's own per-pixel color-difference sensitivity (0-1, default
   0.1); lower = stricter about anti-aliasing.
 
+`run` validates the config's shape before doing anything else — a missing `pages` array, a
+page without a `name`/`url`, or a `threshold`/`pixelSensitivity` outside `0-1` fails
+immediately with a specific message, instead of surfacing later as a confusing error from
+deep inside Playwright or pixelmatch.
+
 ### Defaults worth knowing
 
 - No baseline for a page/viewport combination → one is created automatically and the result
@@ -149,6 +155,48 @@ npx tsx src/cli.ts test --url https://your-app/#/summary --name summary \
 - A page can define `waitForSelector` (preferred — anchors to an observable state) or
   `waitForTimeout` (a fixed fallback) before capture; prefer the former wherever the page
   has something reliable to wait for.
+
+### Avoiding mid-load captures
+
+A capture taken mid-load (spinner visible, partial render) produces a baseline or comparison
+frame that doesn't represent the real screen, and reads as a false regression (or false pass)
+on every subsequent run — `networkidle` alone isn't enough, since it's satisfied by
+unrelated background traffic. Two options, usable together, on top of `waitForSelector`:
+
+- `waitForResponse` (+ optional `waitForResponseTimeout`, default 15000ms) — waits for a
+  response whose URL contains the given substring, and then for a short quiet period (300ms)
+  with no *further* matching response, before proceeding. Waiting for quiet rather than just
+  the first match matters whenever something unrelated can share the same substring —
+  polling, a prefetch, a paginated follow-up request — which would otherwise let the wait
+  resolve before the response that actually settles the state you're capturing. Use it when
+  the state you're capturing depends on a specific API call (the one the triggering
+  navigation or `clickSelectors` action causes), not just "the network went quiet."
+- `stabilizeSelector` (+ optional `stabilizeTimeout`, default 5000ms) — polls that selector's
+  text content and only proceeds once it reads identically, and **non-empty**, on two
+  consecutive checks. A single observation can still be a transient in-between state; this
+  catches that. Non-empty is required deliberately — a selector that currently matches zero
+  elements reads as `''`, and without that check a typo'd or not-yet-rendered selector would
+  "stabilize" on empty content immediately, defeating the point. Best effort: if content
+  never stabilizes within the timeout, a warning is logged and capture proceeds anyway rather
+  than failing the whole run.
+
+```json
+{ "name": "orders", "url": "/orders", "waitForResponse": "/api/orders", "stabilizeSelector": "#orders-table tbody" }
+```
+
+`--wait-for-response <substring>` and `--stabilize-selector <selector>` expose the same two
+options on the standalone `test` command — their timeouts, however, are config-only
+(`waitForResponseTimeout`/`stabilizeTimeout` in a `run` config's `PageTarget`); the `test`
+command always uses the 15000ms/5000ms defaults.
+
+> **Windows/Git Bash note**: a `--wait-for-response` value starting with `/` (e.g.
+> `/api/orders`) can get silently rewritten into a Windows file path (`C:/Program
+> Files/Git/api/orders`) by MSYS's automatic path conversion, which makes the match fail
+> silently (it just falls back to the timeout). Either drop the leading slash
+> (`api/orders` — still matches as a substring) or prefix the command with
+> `MSYS_NO_PATHCONV=1`. This is standard MSYS behavior affecting any CLI argument that looks
+> like an absolute path, not specific to this tool — a JSON config's `waitForResponse` field
+> is unaffected either way.
 
 ## Masking strategy — pixels have no meaning, so someone has to decide
 
@@ -181,6 +229,41 @@ chat widgets, anything that loads asynchronously and causes flakiness).
 neutralizes real layout bugs inside it (an icon overlapping text, broken spacing) along with the
 data. Masking just the dynamic text nodes (`.transaction-amount`, `.transaction-date`) instead
 keeps the surrounding card/row structure — borders, icons, alignment — under real test.
+
+**Masking a scrollable region.** `maskSelectors` paints a selector's own bounding box — which
+is wrong for an internally-scrollable region: the scrollable *content* element (e.g. a
+`tbody` wider than its container) reports its full, unclipped extent, so masking it directly
+bleeds past the visible edge into blank page margin; masking the outer scroll *container*
+instead fixes the bleed but, if that container also wraps structural chrome (a sticky
+header), masks the chrome too. Neither element's bounding box alone is right. `maskIntersections`
+masks the geometric overlap of two selectors' boxes instead — give it the content element
+(for its correctly-clipped vertical extent, excluding the header above it) and the scroll
+container (for its correctly-clipped horizontal extent, excluding the overflow) and it paints
+exactly their intersection:
+
+```json
+{
+  "maskIntersections": [
+    { "contentSelector": "#orders-table tbody", "containerSelector": ".orders-table-scroll" }
+  ]
+}
+```
+
+Config-only (no `--mask-intersect` CLI flag) — CSS selectors routinely contain `:` (e.g.
+`:nth-child`), which makes a colon-delimited pair of selectors in one CLI argument ambiguous
+to parse reliably.
+
+**What masking cannot fix: the masked element's own position varying.** `maskSelectors`
+paints over an element at wherever it currently renders — which neutralizes content, not a
+change in the element's own position between captures. Confirmed in practice: a page whose
+image shifts a few pixels left/right on each load left two thin uncovered strips, exactly
+the shift distance wide, at its left/right edges even while masked — because the mask
+painted in the baseline capture and the mask painted in the comparison capture are two
+different rectangles, and the sliver where only one of them covered that spot is a real,
+unmasked pixel difference. No selector-level mask fixes this; it would need to cover the
+element's full range of possible positions (a fixed container sized to the maximum shift,
+with margin) rather than the element's own current bounding box — not something selector-
+based masking alone can express.
 
 **What masking cannot fix: reflow.** Masking freezes how a region *looks*, not how much *space*
 it takes up. If the dynamic content changes the number of rows (a new transaction appears), the

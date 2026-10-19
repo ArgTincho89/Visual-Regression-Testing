@@ -5,6 +5,3 @@ dist/
 .visual-tests/reports/
 .visual-tests/auth/
 *.log
-
-# POC: real client target (GEP/Seidor Intranet) — never committed, see CLAUDE.md
-poc-arqa-gep/
